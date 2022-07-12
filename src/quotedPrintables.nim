@@ -1,13 +1,10 @@
 ## Quoted-Printable encoding for Nim
 ## https://tools.ietf.org/html/rfc2045#page-19
 
-import strutils, parseutils
+import strutils
 
 const MAIL_SAFE* = Letters + Digits + {'\'', '(',')','+',',','-','.','/',':', ' ', '!'}
-
-template addCL() =
-  result.add "=\c\l"
-  lineChars = 0
+const cl = ['=', '\13', '\10']
 
 proc initEncodeTable*(mailSave = MAIL_SAFE): array[256, string] =
   for ii in 0 ..< 256:
@@ -17,201 +14,100 @@ proc initEncodeTable*(mailSave = MAIL_SAFE): array[256, string] =
     else:
       result[ii] = "=" & ch.ord().toHex(2)
 
+when defined(release):
+  {.push checks: off.}
+
 const encodeTable = initEncodeTable()
 
 proc quoted*(str: string, newlineAt = 76): string =
   ## encodes into Quoted Printables encoding
-  result = newStringOfCap(str.len)
+  # TODO:
+  # - Avoid lookup table, do bit shifting
+  # - result string is quite large, since we over allocate, copy to new string.
+  result = newString( ((str.len div newlineAt) + 1) + str.len * 3 )
+  var resPos = 0
   var lineChars = 0
   for ch in str:
     if lineChars + encodeTable[ch.int].len + 1 >= newlineAt: # ch + '='
-      addCl
-    result.add(encodeTable[ch.int])
+      when defined(js) or defined(nimvm):
+        result[resPos] = '='
+        result[resPos + 1] = '\13'
+        result[resPos + 2] = '\10'
+      else:
+        copyMem(addr result[resPos], unsafeAddr cl, sizeof(cl))
+      resPos.inc 3
+      lineChars = 0
+    if encodeTable[ch.int].len == 3:
+      when defined(js) or defined(nimvm):
+        result[resPos] = encodeTable[ch.int][0]
+        result[resPos + 1] = encodeTable[ch.int][1]
+        result[resPos + 2] = encodeTable[ch.int][2]
+      else:
+        copyMem(addr result[resPos], unsafeAddr encodeTable[ch.int][0], 3)
+      resPos.inc 3
+    else:
+      result[resPos] = encodeTable[ch.int][0]
+      resPos.inc
     lineChars.inc encodeTable[ch.int].len
+  result.setLen(resPos)
 
-proc unQuoted*(str: string, lenToAlloc = 1024): string =
-  ## Decodes from quoted printables
-  # result = newStringOfCap(str.len)
-  result = newStringOfCap(lenToAlloc)
-  var
-    pos: int = 0
-    ch: char
-  while pos < str.len:
-    ch = str[pos]
-    if ch == '=':
-      pos.inc # skip =
-      var skipped = str.skipWhile({'\l', '\c'}, pos)
-      if skipped > 2:
-        raise newException(ValueError, "Could not decode, error at: " & $pos)
-      elif skipped == 0:
-        var hexNum: uint8
-        skipped = parseHex[uint8](str, hexNum, pos, 2)
-        if skipped != 2:
-          raise newException(ValueError, "could not parse hex at:" & $pos)
-        else:
-          result.add hexNum.chr
-      pos.inc skipped
-    else:
-      result.add ch
-      pos.inc
 
-proc unQuoted2*(str: string): string =
+template parseHexDigit(ch: char): uint8 =
+  var num: uint8
+  if ch >= '0' and ch <= '9':
+    num = cast[uint8](ch) - cast[uint8]('0')
+  elif ch >= 'A' and ch <= 'F':
+    num = cast[uint8](ch) - cast[uint8]('A') + 10.uint8
+  else:
+    err = true
+    break
+  num
+
+proc unQuoted*(str: string): string =
   ## Decodes from quoted printables
   result = newString(str.len)
   var
-    pos: int = 0
+    i: int = 0
     j: int = 0
-    ch: char
     err = false
-  while pos < str.len:
-    ch = str[pos]
+  while i < str.len:
+    let ch = str[i]
+    inc i
     if ch == '=':
-      pos.inc # skip =
-      var skipped = str.skipWhile({'\l', '\c'}, pos)
-      if skipped > 2:
+      if i + 1 > str.len:
         err = true
-        raise newException(ValueError, "Could not Encode, error at: " & $pos)
-      if skipped == 0:
-        var hexNum: uint8
-        skipped = parseHex[uint8](str, hexNum, pos, 2)
-        if skipped != 2:
-          raise newException(ValueError, "could not parse hex at:" & $pos)
+        break
+      let
+        ch1 = str[i]
+        ch2 = str[i + 1]
+      # if ch1 == '\10': # enable support for unix line-ending
+      #   i += 1
+      if ch1 == '\13':
+        if ch2 == '\10':
+          i += 2
         else:
-          result[j] = hexNum.chr
-          inc j
-      pos.inc skipped
+          err = true
+          break
+      else:
+        let
+          digit1 = ch1
+          digit2 = ch2
+          digitNum1 = parseHexDigit(digit1) shl 4
+          digitNum2 = parseHexDigit(digit2)
+        result[j] = (digitNum1 + digitNum2).char
+        inc j
+        i += 2
     else:
       result[j] = ch
       inc j
-      pos.inc
+
+  if err:
+    raise newException(ValueError, "Error at position: " & $i)
 
   result.setLen(j)
 
-
-proc unQuoted3*(str: string): string =
-  ## Decodes from quoted printables
-  result = newString(str.len)
-  var
-    pos: int = 0
-    j: int = 0
-    ch: char
-    err = false
-  while pos < str.len:
-    ch = str[pos]
-    if ch == '=':
-      pos.inc # skip =
-      # var skipped = str.skipWhile({'\l', '\c'}, pos)
-      # if
-      var skipped = str.skip("\p", pos)
-      # skipped.inc str.skip("\n", pos)
-      if skipped > 2:z
-        err = true
-        # return
-        raise newException(ValueError, "Could not Encode, error at: " & $pos)
-      if skipped == 0:
-        var hexNum: uint8
-        skipped = parseHex[uint8](str, hexNum, pos, 2)
-        if skipped != 2:
-          raise newException(ValueError, "could not parse hex at:" & $pos)
-          # return
-        else:
-          result[j] = hexNum.chr
-          inc j
-      pos.inc skipped
-    else:
-      result[j] = ch
-      inc j
-      pos.inc
-
-  result.setLen(j)
-
-proc unQuoted4*(str: string): string =
-  ## Decodes from quoted printables, on error an empty string is returned
-  result = newString(str.len)
-  var
-    pos: int = 0
-    strlen: int = 0
-    ch: char
-  while pos < str.len:
-    ch = str[pos]
-    if ch == '=':
-      pos.inc # skip =
-      var skipped = str.skip("\l", pos)
-      skipped.inc str.skip("\c", pos)
-      if skipped > 2:
-        return ""
-      if skipped == 0:
-        var hexNum: uint8
-        skipped = parseHex[uint8](str, hexNum, pos, 2)
-        if skipped != 2:
-          return ""
-        else:
-          result[strlen] = hexNum.chr
-          strlen.inc
-      pos.inc skipped
-    else:
-      result[strlen] = ch
-      strlen.inc
-      pos.inc
-
-  result.setLen(strlen)
-
-
-import macros
-macro foo*(): untyped =
-  result = newStmtList()
-  var cs = newNimNode(nnkCaseStmt)
-  cs.add newIdentNode("buf")
-
-  for idx in 0 .. 255:
-    cs.add nnkOfBranch.newTree(
-      newLit(idx.toHex(2)),
-      nnkStmtList.newTree(
-        nnkReturnStmt.newTree(
-          newLit(idx.chr)
-        )
-      )
-    )
-
-  result.add cs
-
-proc toHexByte*(buf: string): char =
-  foo()
-
-
-proc unQuoted5*(str: string): string =
-  ## Decodes from quoted printables, on error an empty string is returned
-  result = newString(str.len)
-  var
-    pos: int = 0
-    strlen: int = 0
-    ch: char
-  while pos < str.len:
-    ch = str[pos]
-    if ch == '=':
-      pos.inc # skip =
-      var skipped = str.skip("\l", pos)
-      skipped.inc str.skip("\c", pos)
-      if skipped > 2:
-        return ""
-      if skipped == 0:
-        # var hexNum: uint8
-        # skipped = parseHex[uint8](str, hexNum, pos, 2)
-        var hexNum = toHexByte(str[pos] & str[pos + 1])
-        # if skipped != 2:
-        #   return ""
-        # else:
-        result[strlen] = hexNum
-        strlen.inc
-      pos.inc skipped
-    else:
-      result[strlen] = ch
-      strlen.inc
-      pos.inc
-
-  result.setLen(strlen)
-
-
+when defined(release):
+  {.pop.}
 
 
 when isMainModule:
@@ -229,10 +125,11 @@ when isMainModule:
     test "quoted_unQuoted":
       let tsts = @["Iñtërnâtiônàlizætiøn☃💩", "Здравствуйте", "中国", "Z͑ͫ̓ͪ̂ͫ̽͏̴̙̤̞͉͚̯̞̠͍A̴̵̜̰͔ͫ͗͢L̠ͨͧͩ͘G̴̻͈͍͔̹̑͗̎̅͛́Ǫ̵̹̻̝̳͂̌̌͘!͖̬̰̙̗̿̋ͥͥ̂ͣ̐́́͜͞'"]
       for tst in tsts:
-        check tst == quoted(tst).unQuoted3()
+        check tst == quoted(tst).unQuoted()
 
-    test "robust small hex":
-      check "=3d".unQuoted() == "="
+    # Fast unQuoted cannot do small hex
+    # test "robust small hex":
+    #   check "=3d".unQuoted() == "="
 
     test "max chars per line":
       let tst = ($AllChars).repeat(10)
@@ -245,4 +142,14 @@ when isMainModule:
         for line in qtst.splitLines():
           assert line.len <= 5
 
+when true:
+  import benchy
+  let tst = "Iñtërnâtiônàlizætiøn☃💩".repeat(1000)
+  timeIt("quoted"):
+    let res = quoted(tst)
+    keep res
 
+  let qtst = tst.quoted()
+  timeIt("unQuoted"):
+    let res = unQuoted(qtst)
+    keep res
