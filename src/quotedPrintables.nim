@@ -142,14 +142,14 @@ when isMainModule:
         for line in qtst.splitLines():
           assert line.len <= 5
 
-when true:
-  import benchy
-  let tst = "Iñtërnâtiônàlizætiøn☃💩".repeat(1000)
-  timeIt("quoted"):
-    let res = quoted(tst)
-    keep res
+  when true:
+    import benchy
+    let tst = "Iñtërnâtiônàlizætiøn☃💩".repeat(1000)
+    timeIt("quoted"):
+      let res = quoted(tst)
+      keep res
 
-  let qtst = tst.quoted()
-  timeIt("unQuoted"):
-    let res = unQuoted(qtst)
-    keep res
+    let qtst = tst.quoted()
+    timeIt("unQuoted"):
+      let res = unQuoted(qtst)
+      keep res
